@@ -772,7 +772,6 @@ if (normalizada) filas.push(normalizada);
 return filas;
 }
 
-// Nueva función inicializadora con manejo de errores
 async function inicializarApp() {
 const estadoCarga = document.getElementById('estadoCarga');
 try {
@@ -786,7 +785,6 @@ console.error(error);
 }
 }
 
-// Se expone en window y se llama al cargar
 window.addEventListener('load', () => {
 const hoy = new Date();
 document.getElementById('filtroMes').value = hoy.getFullYear() + "-" + String(hoy.getMonth() + 1).padStart(2, '0');
@@ -1256,7 +1254,7 @@ if (!nuevoNombre || !nuevosWatts) return alert('Nombre y Watts son obligatorios'
 try {
 if (nombreOriginal !== nuevoNombre) {
 await setDoc(doc(db, "fichasTecnicas", nuevoNombre), { watts: Number(nuevosWatts), horasAuto: Number(nuevasHoras) });
-if (nombreOriginal) await setDoc(doc(db, "fichasTecnicas", nombreOriginal), null); // eliminar antiguo (opcional, usar deleteDoc)
+if (nombreOriginal) await setDoc(doc(db, "fichasTecnicas", nombreOriginal), null);
 } else {
 await setDoc(doc(db, "fichasTecnicas", nuevoNombre), { watts: Number(nuevosWatts), horasAuto: Number(nuevasHoras) });
 }
@@ -1476,102 +1474,113 @@ console.error(e);
 }
 
 // =================================================================
-// SISTEMA DE IMPORTACIÓN JSON (RESTORE)
+// SISTEMA DE IMPORTACIÓN JSON (RESTORE) CORREGIDO
 // =================================================================
 async function importarJSON(event) {
-const file = event.target.files[0];
-if (!file) return;
-const reader = new FileReader();
-reader.onload = async function(e) {
-try {
-const json = JSON.parse(e.target.result);
-const lotes = [];
-let operaciones = 0;
+  const file = event.target.files[0];
+  if (!file) return;
+  const reader = new FileReader();
+  reader.onload = async function(e) {
+    try {
+      const json = JSON.parse(e.target.result);
+      const lotes = [];
+      let operaciones = 0;
 
-function obtenerLote() {
-if (operaciones === 0 || operaciones >= 500) {
-lotes.push(writeBatch(db));
-operaciones = 0;
-}
-operaciones++;
-return lotes[lotes.length - 1];
-}
+      function obtenerLote() {
+        if (operaciones === 0 || operaciones >= 500) {
+          lotes.push(writeBatch(db));
+          operaciones = 0;
+        }
+        operaciones++;
+        return lotes[lotes.length - 1];
+      }
 
-// "Mi casa" -> registros
-if (Array.isArray(json["Mi casa"])) {
-for (const item of json["Mi casa"]) {
-const ref = doc(collection(db, "registros"));
-const batch = obtenerLote();
-batch.set(ref, {
-fecha: item.fecha ? Timestamp.fromDate(new Date(item.fecha)) : Timestamp.now(),
-servicio: item.servicio || "",
-tipo: item.tipo || "",
-monto: parseFloat(item.monto) || 0,
-notas: item.notas || ""
-});
-}
-}
+      // "Mi casa" -> registros
+      if (Array.isArray(json["Mi casa"])) {
+        for (const item of json["Mi casa"]) {
+          const ref = doc(collection(db, "registros"));
+          const batch = obtenerLote();
+          batch.set(ref, {
+            fecha: item.fecha ? Timestamp.fromDate(new Date(item.fecha)) : Timestamp.now(),
+            servicio: item.servicio || "",
+            tipo: item.tipo || "",
+            monto: parseFloat(item.monto) || 0,
+            notas: item.notas || ""
+          });
+        }
+      }
 
-// "Cisterna" -> pastillas
-if (Array.isArray(json["Cisterna"])) {
-for (const item of json["Cisterna"]) {
-const ref = doc(collection(db, "pastillas"));
-const batch = obtenerLote();
-batch.set(ref, {
-fecha: item.fecha ? Timestamp.fromDate(new Date(item.fecha)) : Timestamp.now(),
-cantidad: item.cantidad || 0,
-notas: item.notas || ""
-});
-}
-}
+      // "Cisterna" -> pastillas
+      if (Array.isArray(json["Cisterna"])) {
+        for (const item of json["Cisterna"]) {
+          const ref = doc(collection(db, "pastillas"));
+          const batch = obtenerLote();
+          batch.set(ref, {
+            fecha: item.fecha ? Timestamp.fromDate(new Date(item.fecha)) : Timestamp.now(),
+            cantidad: item.cantidad || 0,
+            notas: item.notas || ""
+          });
+        }
+      }
 
-// "Config Cisterna" -> config/cisterna
-if (json["Config Cisterna"]) {
-const ref = doc(db, "config", "cisterna");
-const batch = obtenerLote();
-batch.set(ref, json["Config Cisterna"]);
-}
+      // "Config Cisterna" -> config/cisterna (mapeo corregido de array a objeto)
+      if (json["Config Cisterna"] && Array.isArray(json["Config Cisterna"])) {
+        const configData = json["Config Cisterna"];
+        const firstEntry = configData[0];
+        if (Array.isArray(firstEntry) && firstEntry.length >= 3) {
+          const objetoCisterna = {
+            largo: firstEntry[0],
+            ancho: firstEntry[1],
+            profundo: firstEntry[2]
+          };
+          const ref = doc(db, "config", "cisterna");
+          const batch = obtenerLote();
+          batch.set(ref, objetoCisterna);
+        } else {
+          console.warn("Formato inesperado en Config Cisterna:", configData);
+        }
+      }
 
-// "Consumo Diario" -> consumoDiario
-if (Array.isArray(json["Consumo Diario"])) {
-for (const item of json["Consumo Diario"]) {
-const ref = doc(collection(db, "consumoDiario"));
-const batch = obtenerLote();
-batch.set(ref, {
-fecha: item.fecha ? Timestamp.fromDate(new Date(item.fecha)) : Timestamp.now(),
-aparato: item.aparato || "",
-kWh: parseFloat(item.kWh) || 0
-});
-}
-}
+      // "Consumo Diario" -> consumoDiario
+      if (Array.isArray(json["Consumo Diario"])) {
+        for (const item of json["Consumo Diario"]) {
+          const ref = doc(collection(db, "consumoDiario"));
+          const batch = obtenerLote();
+          batch.set(ref, {
+            fecha: item.fecha ? Timestamp.fromDate(new Date(item.fecha)) : Timestamp.now(),
+            aparato: item.aparato || "",
+            kWh: parseFloat(item.kWh) || 0
+          });
+        }
+      }
 
-// "Fichas Tecnicas" -> fichasTecnicas
-if (Array.isArray(json["Fichas Tecnicas"])) {
-for (const item of json["Fichas Tecnicas"]) {
-const nombre = item.aparato || item.nombre || "";
-if (!nombre) continue;
-const ref = doc(db, "fichasTecnicas", nombre);
-const batch = obtenerLote();
-batch.set(ref, {
-watts: parseFloat(item.watts) || 0,
-horasAuto: parseFloat(item.horasAuto) || 0
-});
-}
-}
+      // "Fichas Tecnicas" -> fichasTecnicas
+      if (Array.isArray(json["Fichas Tecnicas"])) {
+        for (const item of json["Fichas Tecnicas"]) {
+          const nombre = item.aparato || item.nombre || "";
+          if (!nombre) continue;
+          const ref = doc(db, "fichasTecnicas", nombre);
+          const batch = obtenerLote();
+          batch.set(ref, {
+            watts: parseFloat(item.watts) || 0,
+            horasAuto: parseFloat(item.horasAuto) || 0
+          });
+        }
+      }
 
-// Ejecutar todos los lotes
-for (const batch of lotes) {
-await batch.commit();
-}
+      // Ejecutar todos los lotes
+      for (const batch of lotes) {
+        await batch.commit();
+      }
 
-alert("✅ Importación completada exitosamente.");
-location.reload();
-} catch (error) {
-alert("❌ Error al importar: " + error.message);
-console.error(error);
-}
-};
-reader.readAsText(file);
+      alert("✅ Importación completada exitosamente.");
+      location.reload();
+    } catch (error) {
+      alert("❌ Error al importar: " + error.message);
+      console.error(error);
+    }
+  };
+  reader.readAsText(file);
 }
 
 // =================================================================
