@@ -760,16 +760,27 @@ let datosGlobales = [], moduloActual = "", colorActual = "", graficos = {};
 let fichasTecnicas = [];
 let estadoRutinas = {};
 
+// Función auxiliar para convertir fechas mixtas a Date
+function convertirFechaAFecha(fecha) {
+  if (!fecha) return new Date();
+  if (typeof fecha.toDate === 'function') {
+    return fecha.toDate();
+  }
+  return parsearFecha(fecha);
+}
+
 async function obtenerDatosDashboard() {
-const q = query(collection(db, "registros"), orderBy("fecha", "asc"));
-const snapshot = await getDocs(q);
-const filas = [];
-snapshot.forEach(doc => {
-const d = doc.data();
-const normalizada = normalizarFila(d);
-if (normalizada) filas.push(normalizada);
-});
-return filas;
+  const q = query(collection(db, "registros"), orderBy("fecha", "asc"));
+  const snapshot = await getDocs(q);
+  const filas = [];
+  snapshot.forEach(doc => {
+    const d = doc.data();
+    const fechaDate = convertirFechaAFecha(d.fecha);
+    const temp = { ...d, fecha: fechaDate };
+    const normalizada = normalizarFila(temp);
+    if (normalizada) filas.push(normalizada);
+  });
+  return filas;
 }
 
 async function inicializarApp() {
@@ -1161,77 +1172,79 @@ renderizarListaRutinas();
 mostrarMensajeRutinas('Todas las rutinas han sido desactivadas.');
 }
 
+// Función refactorizada para consumo diario (antes getConsumoDiario)
 async function actualizarGraficoAparatos() {
-const snapshot = await getDocs(collection(db, "consumoDiario"));
-const dataRaw = [];
-snapshot.forEach(doc => {
-const d = doc.data();
-dataRaw.push({
-fecha: d.fecha && d.fecha.toDate ? d.fecha.toDate().toISOString() : d.fecha,
-aparato: d.aparato,
-kWh: d.kWh
-});
-});
-const mesFiltro = document.getElementById('filtroMes').value;
-let data = mesFiltro ? dataRaw.filter(r => {
-const d = parsearFecha(r.fecha);
-return (d.getFullYear() + "-" + String(d.getMonth() + 1).padStart(2, '0')) === mesFiltro;
-}) : dataRaw;
+  const snapshot = await getDocs(collection(db, "consumoDiario"));
+  const dataRaw = [];
+  snapshot.forEach(doc => {
+    const d = doc.data();
+    const fechaDate = convertirFechaAFecha(d.fecha);
+    dataRaw.push({
+      fecha: fechaDate.toISOString(),
+      aparato: d.aparato,
+      kWh: d.kWh
+    });
+  });
+  const mesFiltro = document.getElementById('filtroMes').value;
+  let data = mesFiltro ? dataRaw.filter(r => {
+    const d = parsearFecha(r.fecha);
+    return (d.getFullYear() + "-" + String(d.getMonth() + 1).padStart(2, '0')) === mesFiltro;
+  }) : dataRaw;
 
-const grupos = {};
-let totalKwh = 0;
-data.forEach(r => {
-grupos[r.aparato] = (grupos[r.aparato] || 0) + r.kWh;
-totalKwh += r.kWh;
-});
+  const grupos = {};
+  let totalKwh = 0;
+  data.forEach(r => {
+    grupos[r.aparato] = (grupos[r.aparato] || 0) + r.kWh;
+    totalKwh += r.kWh;
+  });
 
-const labels = Object.keys(grupos), valores = Object.values(grupos);
-const tarjetaFrecuencia = document.getElementById('tarjeta-frecuencia'),
-listaFrecuencia = document.getElementById('listaFrecuencia'),
-msgVacio = document.getElementById('msgGraficoVacio');
+  const labels = Object.keys(grupos), valores = Object.values(grupos);
+  const tarjetaFrecuencia = document.getElementById('tarjeta-frecuencia'),
+        listaFrecuencia = document.getElementById('listaFrecuencia'),
+        msgVacio = document.getElementById('msgGraficoVacio');
 
-if (labels.length === 0 || totalKwh === 0) {
-if (graficos['graficoAparatos']) graficos['graficoAparatos'].destroy();
-msgVacio.style.display = 'block';
-tarjetaFrecuencia.style.display = 'none';
-return;
-}
+  if (labels.length === 0 || totalKwh === 0) {
+    if (graficos['graficoAparatos']) graficos['graficoAparatos'].destroy();
+    msgVacio.style.display = 'block';
+    tarjetaFrecuencia.style.display = 'none';
+    return;
+  }
 
-msgVacio.style.display = 'none';
-tarjetaFrecuencia.style.display = 'block';
-let htmlFrecuencia = "";
-Object.keys(grupos).sort((a, b) => grupos[b] - grupos[a]).forEach(eq => {
-const kwhEq = grupos[eq];
-const pct = ((kwhEq / totalKwh) * 100).toFixed(1);
-htmlFrecuencia += `<div class="fila-equipo" onclick="abrirEditarFicha('${escapeHtml(eq)}')"><strong>${escapeHtml(eq)}</strong> <span>${kwhEq.toFixed(2)} kWh (${pct}%)</span></div>`;
-});
-listaFrecuencia.innerHTML = htmlFrecuencia;
+  msgVacio.style.display = 'none';
+  tarjetaFrecuencia.style.display = 'block';
+  let htmlFrecuencia = "";
+  Object.keys(grupos).sort((a, b) => grupos[b] - grupos[a]).forEach(eq => {
+    const kwhEq = grupos[eq];
+    const pct = ((kwhEq / totalKwh) * 100).toFixed(1);
+    htmlFrecuencia += `<div class="fila-equipo" onclick="abrirEditarFicha('${escapeHtml(eq)}')"><strong>${escapeHtml(eq)}</strong> <span>${kwhEq.toFixed(2)} kWh (${pct}%)</span></div>`;
+  });
+  listaFrecuencia.innerHTML = htmlFrecuencia;
 
-const ctx = document.getElementById('graficoAparatos').getContext('2d');
-if (graficos['graficoAparatos']) graficos['graficoAparatos'].destroy();
-graficos['graficoAparatos'] = new Chart(ctx, {
-type: 'pie',
-data: {
-labels: labels,
-datasets: [{
-data: valores,
-backgroundColor: ['#e6b800', '#3498db', '#e74c3c', '#2ecc71', '#9b59b6', '#34495e', '#f39c12']
-}]
-},
-options: {
-responsive: true,
-maintainAspectRatio: false,
-plugins: {
-tooltip: {
-callbacks: {
-label: function(c) {
-return ` ${c.label}: ${c.parsed.toFixed(2)} kWh (${((c.parsed / totalKwh) * 100).toFixed(1)}%)`;
-}
-}
-}
-}
-}
-});
+  const ctx = document.getElementById('graficoAparatos').getContext('2d');
+  if (graficos['graficoAparatos']) graficos['graficoAparatos'].destroy();
+  graficos['graficoAparatos'] = new Chart(ctx, {
+    type: 'pie',
+    data: {
+      labels: labels,
+      datasets: [{
+        data: valores,
+        backgroundColor: ['#e6b800', '#3498db', '#e74c3c', '#2ecc71', '#9b59b6', '#34495e', '#f39c12']
+      }]
+    },
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      plugins: {
+        tooltip: {
+          callbacks: {
+            label: function(c) {
+              return ` ${c.label}: ${c.parsed.toFixed(2)} kWh (${((c.parsed / totalKwh) * 100).toFixed(1)}%)`;
+            }
+          }
+        }
+      }
+    }
+  });
 }
 
 function abrirEditarFicha(nombreAparato) {
@@ -1310,69 +1323,70 @@ console.error(e);
 }
 
 async function cargarDatosCisterna() {
-try {
-const cisternaSnap = await getDoc(doc(db, "config", "cisterna"));
-let volumen = 0, dosisIdeal = 0;
-if (cisternaSnap.exists()) {
-const dims = cisternaSnap.data();
-volumen = (dims.largo || 0) * (dims.ancho || 0) * (dims.profundo || 0) * 1000;
-dosisIdeal = Math.round(volumen / 10000);
-}
-document.getElementById('c_volumen').textContent = volumen.toLocaleString() + ' L';
-document.getElementById('c_dosisIdeal').textContent = dosisIdeal;
+  try {
+    const cisternaSnap = await getDoc(doc(db, "config", "cisterna"));
+    let volumen = 0, dosisIdeal = 0;
+    if (cisternaSnap.exists()) {
+      const dims = cisternaSnap.data();
+      volumen = (dims.largo || 0) * (dims.ancho || 0) * (dims.profundo || 0) * 1000;
+      dosisIdeal = Math.round(volumen / 10000);
+    }
+    document.getElementById('c_volumen').textContent = volumen.toLocaleString() + ' L';
+    document.getElementById('c_dosisIdeal').textContent = dosisIdeal;
 
-const pastillasSnap = await getDocs(query(collection(db, "pastillas"), orderBy("fecha", "desc")));
-const aplicaciones = [];
-pastillasSnap.forEach(doc => {
-const d = doc.data();
-aplicaciones.push({
-fecha: d.fecha && d.fecha.toDate ? d.fecha.toDate() : parsearFecha(d.fecha),
-cantidad: d.cantidad
-});
-});
+    const pastillasSnap = await getDocs(query(collection(db, "pastillas"), orderBy("fecha", "desc")));
+    const aplicaciones = [];
+    pastillasSnap.forEach(doc => {
+      const d = doc.data();
+      const fechaDate = convertirFechaAFecha(d.fecha);
+      aplicaciones.push({
+        fecha: fechaDate,
+        cantidad: d.cantidad
+      });
+    });
 
-if (aplicaciones.length > 0) {
-const ultima = aplicaciones[0];
-document.getElementById('c_ultimaFecha').textContent = ultima.fecha.toLocaleDateString('es-DO', { day: 'numeric', month: 'long', year: 'numeric' });
-document.getElementById('c_ultimasPastillas').textContent = ultima.cantidad;
-const tarjetaPred = document.getElementById('c_tarjeta_prediccion');
-tarjetaPred.style.display = 'block';
-let totalDias = 0, cuenta = 0;
-for (let i = 1; i < aplicaciones.length; i++) {
-totalDias += diffDias(aplicaciones[i].fecha, aplicaciones[i-1].fecha);
-cuenta++;
-}
-const promedioDias = cuenta > 0 ? Math.round(totalDias / cuenta) : 0;
-document.getElementById('c_promedio').textContent = promedioDias || '--';
-const proximaFecha = new Date(ultima.fecha.getTime() + promedioDias * 86400000);
-document.getElementById('c_proximaFecha').textContent = proximaFecha.toLocaleDateString('es-DO', { day: 'numeric', month: 'long', year: 'numeric' });
-const diasFaltantes = Math.ceil(diffDias(new Date(), proximaFecha));
-const pFaltantes = document.getElementById('c_diasFaltantesStr');
-if (diasFaltantes > 0) {
-pFaltantes.textContent = `⏳ Faltan ${diasFaltantes} días`;
-pFaltantes.style.color = "#27ae60";
-tarjetaPred.style.borderLeftColor = "#2ecc71";
-tarjetaPred.style.backgroundColor = "#f0fff4";
-} else if (diasFaltantes === 0) {
-pFaltantes.textContent = "⚠️ ¡Toca aplicarla HOY!";
-pFaltantes.style.color = "#e67e22";
-tarjetaPred.style.borderLeftColor = "#e67e22";
-tarjetaPred.style.backgroundColor = "#fdf2e9";
-} else {
-pFaltantes.textContent = `🚨 Atrasado por ${Math.abs(diasFaltantes)} días`;
-pFaltantes.style.color = "#c0392b";
-tarjetaPred.style.borderLeftColor = "#e74c3c";
-tarjetaPred.style.backgroundColor = "#fdecea";
-}
-} else {
-document.getElementById('c_ultimaFecha').textContent = '--';
-document.getElementById('c_ultimasPastillas').textContent = '0';
-document.getElementById('c_tarjeta_prediccion').style.display = 'none';
-}
-document.getElementById('c_alerta').innerHTML = '';
-} catch (e) {
-console.error(e);
-}
+    if (aplicaciones.length > 0) {
+      const ultima = aplicaciones[0];
+      document.getElementById('c_ultimaFecha').textContent = ultima.fecha.toLocaleDateString('es-DO', { day: 'numeric', month: 'long', year: 'numeric' });
+      document.getElementById('c_ultimasPastillas').textContent = ultima.cantidad;
+      const tarjetaPred = document.getElementById('c_tarjeta_prediccion');
+      tarjetaPred.style.display = 'block';
+      let totalDias = 0, cuenta = 0;
+      for (let i = 1; i < aplicaciones.length; i++) {
+        totalDias += diffDias(aplicaciones[i].fecha, aplicaciones[i-1].fecha);
+        cuenta++;
+      }
+      const promedioDias = cuenta > 0 ? Math.round(totalDias / cuenta) : 0;
+      document.getElementById('c_promedio').textContent = promedioDias || '--';
+      const proximaFecha = new Date(ultima.fecha.getTime() + promedioDias * 86400000);
+      document.getElementById('c_proximaFecha').textContent = proximaFecha.toLocaleDateString('es-DO', { day: 'numeric', month: 'long', year: 'numeric' });
+      const diasFaltantes = Math.ceil(diffDias(new Date(), proximaFecha));
+      const pFaltantes = document.getElementById('c_diasFaltantesStr');
+      if (diasFaltantes > 0) {
+        pFaltantes.textContent = `⏳ Faltan ${diasFaltantes} días`;
+        pFaltantes.style.color = "#27ae60";
+        tarjetaPred.style.borderLeftColor = "#2ecc71";
+        tarjetaPred.style.backgroundColor = "#f0fff4";
+      } else if (diasFaltantes === 0) {
+        pFaltantes.textContent = "⚠️ ¡Toca aplicarla HOY!";
+        pFaltantes.style.color = "#e67e22";
+        tarjetaPred.style.borderLeftColor = "#e67e22";
+        tarjetaPred.style.backgroundColor = "#fdf2e9";
+      } else {
+        pFaltantes.textContent = `🚨 Atrasado por ${Math.abs(diasFaltantes)} días`;
+        pFaltantes.style.color = "#c0392b";
+        tarjetaPred.style.borderLeftColor = "#e74c3c";
+        tarjetaPred.style.backgroundColor = "#fdecea";
+      }
+    } else {
+      document.getElementById('c_ultimaFecha').textContent = '--';
+      document.getElementById('c_ultimasPastillas').textContent = '0';
+      document.getElementById('c_tarjeta_prediccion').style.display = 'none';
+    }
+    document.getElementById('c_alerta').innerHTML = '';
+  } catch (e) {
+    console.error(e);
+  }
 }
 
 function abrirModalCisterna() { document.getElementById('modalCisterna').style.display = 'flex'; setTimeout(aplicarControlesNumericos, 100); }
