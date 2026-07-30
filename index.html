@@ -344,6 +344,10 @@ cursor: pointer; white-space: nowrap;
 <div class="tarjeta-menu cloro" onclick="abrirModulo('Cisterna y Cloro', 'vista-cisterna', '#2ecc71')"><span class="icono">💊</span><h3>Cisterna y Cloro</h3></div>
 </div>
 <div id="estadoCarga" class="texto-centrado">Cargando datos...</div>
+<div style="text-align: center; margin-top: 16px;">
+<label for="btnImportar" class="btn-accion" style="background: #8e44ad; color: white; padding: 12px 20px; border-radius: 12px; cursor: pointer; display: inline-block;">📂 Importar Respaldo JSON</label>
+<input type="file" id="btnImportar" accept=".json" style="display: none;" onchange="importarJSON(event)">
+</div>
 </div>
 
 <div id="vista-energia" class="vista">
@@ -542,7 +546,7 @@ cursor: pointer; white-space: nowrap;
 
 <script type="module">
 import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-app.js";
-import { getFirestore, collection, doc, getDoc, getDocs, addDoc, setDoc, query, orderBy, Timestamp } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js";
+import { getFirestore, collection, doc, getDoc, getDocs, addDoc, setDoc, query, orderBy, Timestamp, writeBatch } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js";
 import { getAuth, signInAnonymously } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-auth.js";
 
 const firebaseConfig = {
@@ -557,9 +561,6 @@ appId: "1:588956643849:web:782c8356fa5d50dee77ed8"
 const app = initializeApp(firebaseConfig);
 const db = getFirestore(app);
 const auth = getAuth(app);
-
-// Autenticación anónima antes de todo
-await signInAnonymously(auth);
 
 /* ============================================================
 1. DETECCIÓN DE DISPOSITIVO Y ORIENTACIÓN
@@ -771,21 +772,25 @@ if (normalizada) filas.push(normalizada);
 return filas;
 }
 
-async function cargarDatosIniciales() {
+// Nueva función inicializadora con manejo de errores
+async function inicializarApp() {
+const estadoCarga = document.getElementById('estadoCarga');
 try {
+await signInAnonymously(auth);
 datosGlobales = await obtenerDatosDashboard();
-document.getElementById('estadoCarga').style.display = 'none';
+estadoCarga.style.display = 'none';
 if (moduloActual !== "") procesarDatosModulo();
 } catch (error) {
-document.getElementById('estadoCarga').innerHTML = "<span style='color:red;'>⚠️ Error al cargar datos desde Firestore.</span>";
+estadoCarga.innerHTML = "<span style='color:red;'>⚠️ Error al conectar con Firebase. Revisa la consola.</span>";
 console.error(error);
 }
 }
 
+// Se expone en window y se llama al cargar
 window.addEventListener('load', () => {
 const hoy = new Date();
 document.getElementById('filtroMes').value = hoy.getFullYear() + "-" + String(hoy.getMonth() + 1).padStart(2, '0');
-cargarDatosIniciales();
+inicializarApp();
 });
 
 function abrirModulo(nombre, idVista, color) {
@@ -1471,6 +1476,105 @@ console.error(e);
 }
 
 // =================================================================
+// SISTEMA DE IMPORTACIÓN JSON (RESTORE)
+// =================================================================
+async function importarJSON(event) {
+const file = event.target.files[0];
+if (!file) return;
+const reader = new FileReader();
+reader.onload = async function(e) {
+try {
+const json = JSON.parse(e.target.result);
+const lotes = [];
+let operaciones = 0;
+
+function obtenerLote() {
+if (operaciones === 0 || operaciones >= 500) {
+lotes.push(writeBatch(db));
+operaciones = 0;
+}
+operaciones++;
+return lotes[lotes.length - 1];
+}
+
+// "Mi casa" -> registros
+if (Array.isArray(json["Mi casa"])) {
+for (const item of json["Mi casa"]) {
+const ref = doc(collection(db, "registros"));
+const batch = obtenerLote();
+batch.set(ref, {
+fecha: item.fecha ? Timestamp.fromDate(new Date(item.fecha)) : Timestamp.now(),
+servicio: item.servicio || "",
+tipo: item.tipo || "",
+monto: parseFloat(item.monto) || 0,
+notas: item.notas || ""
+});
+}
+}
+
+// "Cisterna" -> pastillas
+if (Array.isArray(json["Cisterna"])) {
+for (const item of json["Cisterna"]) {
+const ref = doc(collection(db, "pastillas"));
+const batch = obtenerLote();
+batch.set(ref, {
+fecha: item.fecha ? Timestamp.fromDate(new Date(item.fecha)) : Timestamp.now(),
+cantidad: item.cantidad || 0,
+notas: item.notas || ""
+});
+}
+}
+
+// "Config Cisterna" -> config/cisterna
+if (json["Config Cisterna"]) {
+const ref = doc(db, "config", "cisterna");
+const batch = obtenerLote();
+batch.set(ref, json["Config Cisterna"]);
+}
+
+// "Consumo Diario" -> consumoDiario
+if (Array.isArray(json["Consumo Diario"])) {
+for (const item of json["Consumo Diario"]) {
+const ref = doc(collection(db, "consumoDiario"));
+const batch = obtenerLote();
+batch.set(ref, {
+fecha: item.fecha ? Timestamp.fromDate(new Date(item.fecha)) : Timestamp.now(),
+aparato: item.aparato || "",
+kWh: parseFloat(item.kWh) || 0
+});
+}
+}
+
+// "Fichas Tecnicas" -> fichasTecnicas
+if (Array.isArray(json["Fichas Tecnicas"])) {
+for (const item of json["Fichas Tecnicas"]) {
+const nombre = item.aparato || item.nombre || "";
+if (!nombre) continue;
+const ref = doc(db, "fichasTecnicas", nombre);
+const batch = obtenerLote();
+batch.set(ref, {
+watts: parseFloat(item.watts) || 0,
+horasAuto: parseFloat(item.horasAuto) || 0
+});
+}
+}
+
+// Ejecutar todos los lotes
+for (const batch of lotes) {
+await batch.commit();
+}
+
+alert("✅ Importación completada exitosamente.");
+location.reload();
+} catch (error) {
+alert("❌ Error al importar: " + error.message);
+console.error(error);
+}
+};
+reader.readAsText(file);
+}
+
+// =================================================================
 // SISTEMA DE INPUTS: BOTONES +/- Y TECLADO VIRTUAL
 // =================================================================
 document.body.insertAdjacentHTML('beforeend', `
@@ -1599,7 +1703,9 @@ abrirEditarFicha,
 actualizarFicha,
 procesarDatosModulo,
 actualizarGraficoAparatos,
-numpadPress
+numpadPress,
+inicializarApp,
+importarJSON
 });
 </script>
 </body>
